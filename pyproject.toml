@@ -2,8 +2,8 @@
 
 [build-system]
 requires = [
-    "setuptools >= 65",
-    "wheel >= 0.38,
+  "setuptools>=65",
+  "wheel>=0.38"
 ]
 build-backend = "setuptools.build_meta"
 
@@ -11,5 +11,7 @@ build-backend = "setuptools.build_meta"
 name = "ajlab"
 version = "0.1.0"
 dependencies = [
-    "matplotlib", "numpy", "pandas"
+  "matplotlib",
+  "numpy",
+  "pandas"
 ]
