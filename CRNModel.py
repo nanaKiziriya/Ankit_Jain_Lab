@@ -13,7 +13,7 @@ from pandas.api.types import is_dict_like
 
 from abc import ABC, abstractmethod
 
-################################################################
+################################################################################################################################
 
 #@title Abstract class: CRN Model
 #@markdown parent class for all other CRN models in this program
@@ -72,7 +72,234 @@ class CRNModel(Model,ABC) :
   def fit(self) :
     return super().fit(self.emp_data,params=self.emp_params,t=self.t_eval)
 
-################################################################
+################################################################################################################################
+
+#@title Kurchak1 Model v.1, not maximal (uses fl_mult)
+
+class Kurchak1Model(CRNModel) :
+
+  model_cnt = 0
+  method = 'RK45'
+
+  def __init__(self,
+               t_eval, emp_data,  # super
+               name=None,         # super
+               method='RK45',     # self
+               zerok4k5:int=0) :  # self
+
+    self.method = method
+
+    # argument validation
+    assert 0<=zerok4k5 and zerok4k5<3, f'{type(self)}.__init__ argument \'zerok4k5\' must be between 0 and 2. \n(e.g. 0 = both non-zero, 1 = only k5 zero, 2 = only k4 zero)'
+    assert is_list_like(t_eval) , f'{type(self)}.__init__ argument \'t_eval\' must be list-like.'
+    assert is_list_like(emp_data) , f'{type(self)}.__init__ argument \'emp_data\' must be list-like.'
+
+    if not name :
+      name = f'Kurchak1Model_{model_cnt}'
+      model_cnt+=1
+
+    # Set empirical limits on Parameters
+    # (name, value=None, vary=True, min=-inf, max=inf, expr=None, brute_step=None)
+    emp_params = Parameters()
+    emp_params.add('k0', value=.4, min=0) # decomposition
+    emp_params.add('k1', value=.2, min=0) # nucleation
+    emp_params.add('k2', value=0, min=0) # aggregation
+    emp_params.add('k3', value=.03, min=0) # rev. decomp
+    emp_params.add('k4', value=0, vary=zerok4k5!=2, min=0) # rev. nucl
+    emp_params.add('k5', value=0, vary=zerok4k5!=1, min=0) # rev. aggr
+    emp_params.add('fl_mult', value=10, min=1) # fl_G/fl_D
+    # emp_params.add('fl_mult', value=10, vary=False, min=1) # fl_G/fl_D
+    emp_params.add('D_init', value=1, min=0.1) # intial species
+
+    # super constructor
+    super().__init__(t_eval = t_eval,
+                     emp_data = emp_data,
+                     emp_params = emp_params,
+                     name = name)
+
+  def func(self,t, k0,k1,k2,k3,k4,k5,fl_mult,D_init):
+    t = np.asarray(t)
+    t_span = (t[0], t[-1])
+
+    def rhs(T, y):
+      D,G = y
+      dDdt = k3*(D_init - G) - (k0 + k3)*D
+      dGdt = (D_init - D)*(k1 + k2*G) - G*(k1 + k4) - G**2*(k2 + k5)
+      return [dDdt, dGdt]
+
+    # def inner_func(x,Aggr:np.ndarray) :
+    #   nonlocal t, k0,k1,k2,k3,k4,k5,fl_mult,D_init
+    #   D = Aggr[0]
+    #   G = Aggr[1]
+    #   return np.array(k3*(D_init-G) - (k0+k3)*D, # dD/dt
+    #           (D_init-D)*(k1+k2*G) - G*(k1+k4) - G**2*(k2+k5)) # dG/dt
+
+    # default 'RK45', alt 'BDF' 'RK23' 'DOP853' 'Radau' 'LSODA'
+    # https://docs.scipy.org/doc/scipy/reference/generated/scipy.integrate.solve_ivp.html#:~:text=methodstr
+    sol = solve_ivp(rhs, t_span, y0 = [D_init,0],
+        dense_output=True,atol=1e-6, rtol=1e-6,
+        # t_eval = t,
+        method=self.method
+        # BDF seems to work best so far, though they all kinda suck for this
+        # Maybe It's better to normalize AFTER?
+        # A: YES, scale down* after fitting, else truncation error -> stiff
+        #
+        )
+
+    if not sol.success:
+        raise RuntimeError("ODE solver failed: " + sol.message)
+
+    Y = sol.sol(t)    # shape (n_states, len(t_obs))
+    # Y = sol.y   # shape (2, len(t))
+    return Y[0] + fl_mult * Y[1]
+
+################################################################################################################################
+
+#@title Boateng1 Model v.1_full
+#@markdown stiff
+
+class Boateng1Model(CRNModel) :
+
+  model_cnt = 0
+  method = 'RK45'
+
+  def __init__(self,
+               t_eval, emp_data,  # super
+               name=None,         # super
+               method='RK45') :   # self
+
+    self.method = method
+
+    # argument validation
+    assert is_list_like(t_eval) , f'{type(self)}.__init__ argument \'t_eval\' must be list-like.'
+    assert is_list_like(emp_data) , f'{type(self)}.__init__ argument \'emp_data\' must be list-like.'
+
+    if not name :
+      name = f'Boateng1Model_{model_cnt}'
+      model_cnt+=1
+
+    # Set empirical limits on Parameters
+    # (name, value=None, vary=True, min=-inf, max=inf, expr=None, brute_step=None)
+    emp_params = Parameters()
+    emp_params.add('k0', value=1, vary=True, min=0) # 2nd aggregation
+    emp_params.add('k1', value=1, min=0) # nucleation
+    emp_params.add('k2', value=1, min=0) # 1st aggregation
+    emp_params.add('k3', value=1, vary=True, min=0) # rev. 2nd aggr
+    emp_params.add('k4', value=0, vary=True, min=0) # rev. nucl
+    emp_params.add('k5', value=0, vary=True, min=0) # rev. aggr
+    emp_params.add('fl_A', value=1.0, min=0.01) # fl_A
+    emp_params.add('fl_B', value=1.0, min=0.01) # fl_B
+    emp_params.add('fl_C', value=1.0, min=0.01) # fl_C
+    emp_params.add('A_init', value=1, min=0.01) # initial conc. A
+    emp_params.add('B_init', value=0.1, min=0.01) # initial conc. B
+    emp_params.add('C_init', value=0.1, vary=True, min=0.01) # initial conc. C
+
+    # super constructor
+    super().__init__(t_eval = t_eval,
+                     emp_data = emp_data,
+                     emp_params = emp_params,
+                     name = name)
+
+  def func(self,t, k0,k1,k2,k3,k4,k5, fl_A,fl_B,fl_C, A_init,B_init,C_init):
+    t = np.asarray(t)
+    t_span = (t[0], t[-1])
+
+    def rhs(T, y):
+      # D,G = y
+      A,B,C = y
+
+      # dDdt = k3*(D_init - G) - (k0 + k3)*D
+      # dGdt = (D_init - D)*(k1 + k2*G) - G*(k1 + k4) - G**2*(k2 + k5)
+      dAdt = B*(k4 - k2*A + k5*B) - k1*A
+      dCdt = k0*B - k3*C
+      dBdt = -1*(dAdt+dCdt)
+
+      return [dAdt, dBdt, dCdt]
+
+    # default 'RK45', alt 'BDF' 'RK23' 'DOP853' 'Radau' 'LSODA'
+    sol = solve_ivp(rhs, t_span, y0 = [A_init,B_init,C_init],
+        dense_output=True, method=self.method)
+
+    if not sol.success:
+        raise RuntimeError("ODE solver failed: " + sol.message)
+
+    Y = sol.sol(t)
+    return fl_A*Y[0] + fl_B*Y[1] + fl_C*Y[2]
+
+################################################################################################################################
+
+#@title Boateng1 Model v.2_partial
+#@markdown
+
+class Boateng1Model_v2(CRNModel) :
+
+  model_cnt = 0
+  method = 'RK45'
+
+  def __init__(self,
+               t_eval, emp_data,  # super
+               name=None,         # super
+               method='RK45') :   # self
+
+    self.method = method
+
+    # argument validation
+    assert is_list_like(t_eval) , f'{type(self)}.__init__ argument \'t_eval\' must be list-like.'
+    assert is_list_like(emp_data) , f'{type(self)}.__init__ argument \'emp_data\' must be list-like.'
+
+    if not name :
+      name = f'Boateng1Model_v2_{model_cnt}'
+      model_cnt+=1
+
+    # Set empirical limits on Parameters
+    # (name, value=None, vary=True, min=-inf, max=inf, expr=None, brute_step=None)
+    emp_params = Parameters()
+    emp_params.add('k0', value=1, vary=True, min=0) # 2nd aggregation
+    emp_params.add('k1', value=1, min=0) # nucleation
+    emp_params.add('k2', value=1, min=0) # 1st aggregation
+    emp_params.add('k3', value=1, vary=True, min=0) # rev. 2nd aggr
+    emp_params.add('k4', value=0, vary=True, min=0) # rev. nucl
+    emp_params.add('k5', value=0, vary=True, min=0) # rev. aggr
+    emp_params.add('fl_A', value=1.0, min=0.01) # fl_A
+    emp_params.add('fl_B', value=1.0, min=0.01) # fl_B
+    emp_params.add('fl_C', value=1.0, min=0.01) # fl_C
+    emp_params.add('A_init', value=1, min=0.01) # initial conc. A
+    emp_params.add('B_init', value=0.1, min=0.01) # initial conc. B
+    # emp_params.add('C_init', value=0.1, vary=True, min=0.01) # initial conc. C
+
+    # super constructor
+    super().__init__(t_eval = t_eval,
+                     emp_data = emp_data,
+                     emp_params = emp_params,
+                     name = name)
+
+  def func(self,t, k0,k1,k2,k3,k4,k5, fl_A,fl_B,fl_C, A_init,B_init):
+    t = np.asarray(t)
+    t_span = (t[0], t[-1])
+
+    def rhs(T, y):
+      # D,G = y
+      A,B,C = y
+
+      # dDdt = k3*(D_init - G) - (k0 + k3)*D
+      # dGdt = (D_init - D)*(k1 + k2*G) - G*(k1 + k4) - G**2*(k2 + k5)
+      dAdt = B*(k4 - k2*A + k5*B) - k1*A
+      dCdt = k0*B - k3*C
+      dBdt = -1*(dAdt+dCdt)
+
+      return [dAdt, dBdt, dCdt]
+
+    # default 'RK45', alt 'BDF' 'RK23' 'DOP853' 'Radau' 'LSODA'
+    sol = solve_ivp(rhs, t_span, y0 = [A_init,B_init,0],
+        dense_output=True, method=self.method)
+
+    if not sol.success:
+        raise RuntimeError("ODE solver failed: " + sol.message)
+
+    Y = sol.sol(t)
+    return fl_A*Y[0] + fl_B*Y[1] + fl_C*Y[2]
+
+################################################################################################################################
 
 #@title Finke-Watzky Model
 #@markdown shown to not be sufficient for Boateng1 system (June 22, 2026)
