@@ -13,6 +13,10 @@ from pandas.api.types import is_dict_like
 
 from abc import ABC, abstractmethod
 
+################################################################
+
+#@title Abstract class: CRN Model
+#@markdown parent class for all other CRN models in this program
 
 class CRNModel(Model,ABC) :
 
@@ -67,3 +71,46 @@ class CRNModel(Model,ABC) :
 
   def fit(self) :
     return super().fit(self.emp_data,params=self.emp_params,t=self.t_eval)
+
+################################################################
+
+#@title Finke-Watzky Model
+#@markdown shown to not be sufficient for Boateng1 system (June 22, 2026)
+
+# Logistic CRN model!
+class FinkeWatzkyModel(CRNModel) :
+
+  model_cnt = 0
+
+  def __init__(self,
+               t_eval, emp_data,  # super
+               name=None):        # super
+
+    # argument validation
+    assert is_list_like(t_eval) , f'{type(self)}.__init__ argument \'t_eval\' must be list-like.'
+    assert is_list_like(emp_data) , f'{type(self)}.__init__ argument \'emp_data\' must be list-like.'
+
+    if not name :
+      name = f'FinkeWatzkyModel_{model_cnt}'
+      model_cnt+=1
+
+    # Set empirical limits on Parameters
+    # (name, value=None, vary=True, min=-inf, max=inf, expr=None, brute_step=None)
+    emp_params = Parameters()
+    emp_params.add('k0', value=10, min=0) # nucleation rate
+    emp_params.add('k1', value=10, min=0) # aggregation rate
+    emp_params.add('fl_mult', value=10, min=0) # fl_G
+    emp_params.add('M_init', value=10, min=0.1) # intial species
+
+    # super constructor
+    super().__init__(t_eval = t_eval,
+                     emp_data = emp_data,
+                     emp_params = emp_params,
+                     name = name)
+
+  def func(self,t, k0,k1,fl_mult,M_init): # EXPLICIT SOLUTION
+    s = k0+k1*M_init
+    M = s*M_init/(M_init*k1+k0*np.exp(s)*t)
+    G = M_init-M
+    return fl_mult*G # degree of aggr. ~ fluorescence
+    # fl_M nontrivial due to lack of other fl-contributing species
